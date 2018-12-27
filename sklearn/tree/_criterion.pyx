@@ -22,6 +22,9 @@ from libc.string cimport memcpy
 from libc.string cimport memset
 from libc.math cimport fabs
 
+import scipy.optimize.nnls
+from cpython cimport array
+
 import numpy as np
 cimport numpy as np
 np.import_array()
@@ -203,10 +206,30 @@ cdef class Criterion:
         self.children_impurity(&impurity_left, &impurity_right)
 
         return ((self.weighted_n_node_samples / self.weighted_n_samples) *
-                (impurity - (self.weighted_n_right / 
+                (impurity - (self.weighted_n_right /
                              self.weighted_n_node_samples * impurity_right)
-                          - (self.weighted_n_left / 
+                          - (self.weighted_n_left /
                              self.weighted_n_node_samples * impurity_left)))
+
+    cdef double LR_proxy_split_improvement(self, DTYPE_t* X, SIZE_t X_sample_stride, SIZE_t X_feature_stride):
+        pass
+
+    cdef void LR_children_cost(self, double* impurity_left,
+                                double* impurity_right, DTYPE_t* X, SIZE_t X_sample_stride, SIZE_t X_feature_stride):
+        pass
+
+    cdef double LR_node_cost(self, DTYPE_t* X, SIZE_t X_sample_stride, SIZE_t X_feature_stride):
+        pass
+
+
+    cdef double LR_cost_improvement(self, double impurity, DTYPE_t* X, SIZE_t X_sample_stride, SIZE_t X_feature_stride):
+        pass
+
+    cdef int add_se(self, np.ndarray[DOUBLE_t, ndim=2, mode="c"] lift_se) except -1:
+        pass
+
+    cdef void node_coefficients(self, double* dest, DTYPE_t* X, SIZE_t X_sample_stride, SIZE_t X_feature_stride):
+        pass
 
 
 cdef class ClassificationCriterion(Criterion):
@@ -742,8 +765,9 @@ cdef class RegressionCriterion(Criterion):
         self.sum_total = <double*> calloc(n_outputs, sizeof(double))
         self.sum_left = <double*> calloc(n_outputs, sizeof(double))
         self.sum_right = <double*> calloc(n_outputs, sizeof(double))
+        self.coefficients = <double*> calloc(8, sizeof(double))
 
-        if (self.sum_total == NULL or 
+        if (self.sum_total == NULL or
                 self.sum_left == NULL or
                 self.sum_right == NULL):
             raise MemoryError()
@@ -836,14 +860,6 @@ cdef class RegressionCriterion(Criterion):
         cdef DOUBLE_t w = 1.0
         cdef DOUBLE_t y_ik
 
-        # Update statistics up to new_pos
-        #
-        # Given that
-        #           sum_left[x] +  sum_right[x] = sum_total[x]
-        # and that sum_total is known, we are going to update
-        # sum_left from the direction that require the least amount
-        # of computations, i.e. from pos to new_pos or from end to new_pos.
-
         if (new_pos - pos) <= (end - new_pos):
             for p in range(pos, new_pos):
                 i = samples[p]
@@ -900,6 +916,158 @@ cdef class MSE(RegressionCriterion):
 
         MSE = var_left + var_right
     """
+    cdef double weight_se(self, SIZE_t start, SIZE_t end):
+        cdef SIZE_t* samples = self.samples
+        cdef DOUBLE_t* lift_se = self.lift_se
+        cdef DOUBLE_t weight = 0
+        for p in range(start, end):
+            i = samples[p]
+            weight += 1  / lift_se[i * self.lift_se_stride] ** 2
+        return weight
+
+    cdef double linear_regression(self, DTYPE_t* X, SIZE_t X_sample_stride, SIZE_t X_feature_stride, DOUBLE_t* y, SIZE_t start, SIZE_t end, DOUBLE_t* coefficients):
+        cdef SIZE_t* samples = self.samples
+        cdef DOUBLE_t* lift_se = self.lift_se
+        cdef SIZE_t i
+        cdef SIZE_t p
+        data_X = np.ndarray((end-start, 8))
+        data_y = np.ndarray((end-start,))
+        data_lift_se = np.ndarray((end-start,))
+
+        for p in range(start, end):
+            i = samples[p]
+
+            data_y[p-start] = y[i * self.y_stride]
+            data_lift_se[p-start] = lift_se[i * self.lift_se_stride]
+            for j in range(8):
+                data_X[p-start][j] = X[i * X_sample_stride + j * X_feature_stride]
+
+
+        lift_se_np = np.square(data_lift_se)
+        reciprocal_errors = np.reciprocal(lift_se_np, where = lift_se_np!=0)
+        diag_errors = np.diag(reciprocal_errors)
+
+        solution = scipy.optimize.lsq_linear(np.dot(diag_errors, data_X),
+                                         np.dot(diag_errors, data_y),
+                                         bounds=(0, 1))
+
+
+        cdef array.array x_arr = array.array('d', solution.x)
+        for i in range(8):
+            coefficients[i] = x_arr.data.as_doubles[i]
+
+        return solution.cost
+
+
+    cdef double LR_proxy_split_improvement(self, DTYPE_t* X, SIZE_t X_sample_stride, SIZE_t X_feature_stride):
+        """Compute a proxy of the impurity reduction
+
+        This method is used to speed up the search for the best split.
+        It is a proxy quantity such that the split that maximizes this value
+        also maximizes the impurity improvement. It neglects all constant terms
+        of the impurity decrease for a given split.
+
+        The absolute impurity improvement is only computed by the
+        impurity_improvement method once the best split has been found.
+        """
+
+        cdef double* sum_left = self.sum_left
+        cdef double* sum_right = self.sum_right
+
+        cdef SIZE_t k
+        cdef double proxy_impurity_left = 0.0
+        cdef double proxy_impurity_right = 0.0
+
+        for k in range(self.n_outputs):
+            proxy_impurity_left += sum_left[k] * sum_left[k]
+            proxy_impurity_right += sum_right[k] * sum_right[k]
+
+        """"""
+        cdef SIZE_t start = self.start
+        cdef SIZE_t end = self.end
+        cdef SIZE_t pos = self.pos
+        cdef DOUBLE_t* y = self.y
+        cdef DOUBLE_t cost_left
+        cdef DOUBLE_t cost_right
+        cost_left = self.linear_regression(X, X_sample_stride, X_feature_stride, y, start, pos, self.coefficients)
+        cost_right = self.linear_regression(X, X_sample_stride, X_feature_stride, y, pos, end, self.coefficients)
+        return (-1.0 * cost_left +
+                -1.0 * cost_right)
+        # return (-1.0 * cost_left / self.weight_se(start, pos) +
+        #         -1.0 * cost_right / self.weight_se(pos, end))
+
+    cdef void LR_children_cost(self, double* impurity_left,
+                                double* impurity_right,
+                                DTYPE_t* X, SIZE_t X_sample_stride, SIZE_t X_feature_stride):
+        """Evaluate the impurity in children nodes, i.e. the impurity of the
+           left child (samples[start:pos]) and the impurity the right child
+           (samples[pos:end])."""
+
+        cdef SIZE_t start = self.start
+        cdef SIZE_t end = self.end
+        cdef SIZE_t pos = self.pos
+        cdef DOUBLE_t* y = self.y
+        cdef DOUBLE_t cost_left
+        cdef DOUBLE_t cost_right
+        cost_left = self.linear_regression(X, X_sample_stride, X_feature_stride, y, start, pos, self.coefficients)
+        cost_right = self.linear_regression(X, X_sample_stride, X_feature_stride, y, pos, end, self.coefficients)
+        impurity_left[0] = cost_left
+        impurity_right[0] = cost_right
+        # impurity_left[0] = cost_left / self.weight_se(start, pos)
+        # impurity_right[0] = cost_right / self.weight_se(pos, end)
+
+    cdef double LR_node_cost(self, DTYPE_t* X, SIZE_t X_sample_stride, SIZE_t X_feature_stride):
+        """Evaluate the impurity of the current node, i.e. the impurity of
+           samples[start:end]."""
+        cdef SIZE_t start = self.start
+        cdef SIZE_t end = self.end
+        cdef DOUBLE_t* y = self.y
+        cdef DOUBLE_t cost
+        cost = self.linear_regression(X, X_sample_stride, X_feature_stride, y, start, end, self.coefficients)
+
+        return cost
+        # return cost / self.weight_se(start, end)
+
+    cdef double LR_cost_improvement(self, double impurity, DTYPE_t* X, SIZE_t X_sample_stride, SIZE_t X_feature_stride):
+        """Compute the improvement in impurity
+
+        This method computes the improvement in impurity when a split occurs.
+        The weighted impurity improvement equation is the following:
+
+            N_t / N * (impurity - N_t_R / N_t * right_impurity
+                                - N_t_L / N_t * left_impurity)
+
+        where N is the total number of samples, N_t is the number of samples
+        at the current node, N_t_L is the number of samples in the left child,
+        and N_t_R is the number of samples in the right child,
+
+        Parameters
+        ----------
+        impurity : double
+            The initial impurity of the node before the split
+
+        Return
+        ------
+        double : improvement in impurity after the split occurs
+        """
+        cdef SIZE_t start = self.start
+        cdef SIZE_t end = self.end
+        cdef SIZE_t pos = self.pos
+
+        cdef double impurity_left
+        cdef double impurity_right
+
+        self.LR_children_cost(&impurity_left,
+                                &impurity_right, X, X_sample_stride, X_feature_stride)
+        cdef double weighted_n_samples = self.weight_se(0, <int>self.weighted_n_samples)
+
+        return impurity - impurity_left - impurity_right
+        # return ((self.weight_se(start, end) / weighted_n_samples) *
+        #         (impurity - (self.weight_se(pos, end) /
+        #                      self.weight_se(start, end) * impurity_right)
+        #                   - (self.weight_se(start, pos) /
+        #                      self.weight_se(start, end) * impurity_left)))
+
 
     cdef double node_impurity(self) nogil:
         """Evaluate the impurity of the current node, i.e. the impurity of
@@ -987,6 +1155,37 @@ cdef class MSE(RegressionCriterion):
 
         impurity_left[0] /= self.n_outputs
         impurity_right[0] /= self.n_outputs
+
+    cdef void node_coefficients(self, double* dest, DTYPE_t* X, SIZE_t X_sample_stride, SIZE_t X_feature_stride):
+        self.linear_regression(X, X_sample_stride, X_feature_stride, self.y, self.start, self.end, dest)
+
+
+    cdef void node_value(self, double* dest) nogil:
+        """Compute the node value of samples[start:end] into dest."""
+
+    cdef int add_se(self, np.ndarray[DOUBLE_t, ndim=1, mode="c"] lift_se) except -1:
+        self.lift_se = <DOUBLE_t*> lift_se.data
+        self.lift_se_stride = <SIZE_t> lift_se.strides[0] / <SIZE_t> lift_se.itemsize
+
+
+cdef convert_to_python(double *ptr, int n):
+    cdef int i
+    lst=np.array()
+    for i in range(n):
+        lst.append(ptr[i])
+    return lst
+
+cdef convert_to_python_2d(double *ptr, int m, int n):
+    cdef int i
+    idx = 0
+    lst=[]
+    for i in range(m):
+        lst[i].append([])
+        for j in range(n):
+            lst[i].append(ptr[idx])
+            idx+=1
+
+    return lst
 
 cdef class MAE(RegressionCriterion):
     r"""Mean absolute error impurity criterion
@@ -1290,7 +1489,7 @@ cdef class MAE(RegressionCriterion):
                     w = sample_weight[i]
 
                 impurity_left += fabs(y_ik - median) * w
-        p_impurity_left[0] = impurity_left / (self.weighted_n_left * 
+        p_impurity_left[0] = impurity_left / (self.weighted_n_left *
                                               self.n_outputs)
 
         for k in range(self.n_outputs):
@@ -1304,7 +1503,7 @@ cdef class MAE(RegressionCriterion):
                     w = sample_weight[i]
 
                 impurity_right += fabs(y_ik - median) * w
-        p_impurity_right[0] = impurity_right / (self.weighted_n_right * 
+        p_impurity_right[0] = impurity_right / (self.weighted_n_right *
                                                 self.n_outputs)
 
 

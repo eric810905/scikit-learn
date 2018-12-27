@@ -64,6 +64,9 @@ cdef class Splitter:
     cdef SIZE_t y_stride
     cdef DOUBLE_t* sample_weight
 
+    cdef DOUBLE_t* lift_se
+    cdef SIZE_t lift_se_stride
+
     # The samples vector `samples` is maintained by the Splitter object such
     # that the samples contained in a node are contiguous. With this setting,
     # `node_split` reorganizes the node samples `samples[start:end]` in two
@@ -91,8 +94,8 @@ cdef class Splitter:
     cdef int node_split(self,
                         double impurity,   # Impurity of the node
                         SplitRecord* split,
-                        SIZE_t* n_constant_features) nogil except -1
+                        SIZE_t* n_constant_features) except -1
 
-    cdef void node_value(self, double* dest) nogil
+    cdef void node_value(self, double* dest)
 
-    cdef double node_impurity(self) nogil
+    cdef double node_impurity(self)

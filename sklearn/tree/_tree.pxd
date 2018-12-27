@@ -103,3 +103,8 @@ cdef class TreeBuilder:
                 np.ndarray sample_weight=*,
                 np.ndarray X_idx_sorted=*)
     cdef _check_input(self, object X, np.ndarray y, np.ndarray sample_weight)
+
+    cpdef my_build(self, Tree tree, object X, np.ndarray y, np.ndarray lift_se,
+                np.ndarray sample_weight=*,
+                np.ndarray X_idx_sorted=*)
+    cdef _my_check_input(self, object X, np.ndarray y, np.ndarray lift_se, np.ndarray sample_weight)

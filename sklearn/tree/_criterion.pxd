@@ -48,6 +48,10 @@ cdef class Criterion:
                                     # where k is output index.
     cdef double* sum_left           # Same as above, but for the left side of the split
     cdef double* sum_right          # same as above, but for the right side of the split
+    cdef double* coefficients
+
+    cdef DOUBLE_t* lift_se                    # Values of y
+    cdef SIZE_t lift_se_stride                 # Stride in y (since n_outputs >= 1)
 
     # The criterion object is maintained such that left and right collected
     # statistics correspond to samples[start:pos] and samples[pos:end].
@@ -65,6 +69,15 @@ cdef class Criterion:
     cdef void node_value(self, double* dest) nogil
     cdef double impurity_improvement(self, double impurity) nogil
     cdef double proxy_impurity_improvement(self) nogil
+    cdef double LR_proxy_split_improvement(self, DTYPE_t* X, SIZE_t X_sample_stride, SIZE_t X_feature_stride)
+    cdef void LR_children_cost(self, double* impurity_left,
+                                double* impurity_right, DTYPE_t* X, SIZE_t X_sample_stride, SIZE_t X_feature_stride)
+    cdef double LR_node_cost(self, DTYPE_t* X, SIZE_t X_sample_stride, SIZE_t X_feature_stride)
+    cdef double LR_cost_improvement(self, double impurity, DTYPE_t* X, SIZE_t X_sample_stride, SIZE_t X_feature_stride)
+    cdef int add_se(self, np.ndarray lift_se) except -1
+    cdef void node_coefficients(self, double* dest, DTYPE_t* X, SIZE_t X_sample_stride, SIZE_t X_feature_stride)
+
+
 
 cdef class ClassificationCriterion(Criterion):
     """Abstract criterion for classification."""
