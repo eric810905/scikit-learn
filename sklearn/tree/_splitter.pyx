@@ -484,7 +484,7 @@ cdef class BestSplitter(BaseDenseSplitter):
 
                     with gil:
                         split_value_interval = 1.0 * (Xf[end-1] - Xf[start]) / NUM_TRIALS_PER_FEATURE
-                        next_split_value = split_value_interval
+                        next_split_value = Xf[start] + split_value_interval
 
                     while p < end:
                         while (p + 1 < end and
