@@ -59,7 +59,7 @@ DOUBLE = _tree.DOUBLE
 
 CRITERIA_CLF = {"gini": _criterion.Gini, "entropy": _criterion.Entropy}
 CRITERIA_REG = {"mse": _criterion.MSE, "friedman_mse": _criterion.FriedmanMSE,
-                "mae": _criterion.MAE}
+                "mae": _criterion.MAE, "my_criterion": _criterion.LR_Criterion}
 
 DENSE_SPLITTERS = {"best": _splitter.BestSplitter,
                    "random": _splitter.RandomSplitter}
@@ -446,14 +446,14 @@ class BaseDecisionTree(six.with_metaclass(ABCMeta, BaseEstimator)):
                         axis=0)
 
                 return predictions
-
         # Regression
         else:
-            if self.n_outputs_ == 1:
-                return proba[:, 0]
-
-            else:
-                return proba[:, :, 0]
+            return proba
+            # if self.n_outputs_ == 1:
+            #     return proba[:, 0]
+            #
+            # else:
+            #     return proba[:, :, 0]
 
     def apply(self, X, check_input=True):
         """

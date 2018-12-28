@@ -15,6 +15,17 @@
 #
 # License: BSD 3 clause
 
+# this is very slow when size of the data is large
+# MODE = 'default' # split each data points
+# this is a reasonable way to speed up the splitting process
+MODE = 'value_split' # split the data by its value with interval (max_value - min_value) / NUM_TRIALS_PER_FEATURE
+# this can also speed up the splitting process
+# MODE = 'data_split' # split the data by spliting the data points evenly to NUM_TRIALS_PER_FEATURE splits
+# the percentage interval to print while splitting
+PERCENT_PRINT = 10
+# this is not used when the mode is defaul. the smaller this number, the faster the splitting process
+NUM_TRIALS_PER_FEATURE = 10
+
 from ._criterion cimport Criterion
 
 from libc.stdlib cimport free
@@ -25,6 +36,7 @@ from libc.string cimport memset
 import numpy as np
 cimport numpy as np
 np.import_array()
+import time
 
 from scipy.sparse import csc_matrix
 
@@ -141,6 +153,9 @@ cdef class Splitter:
             closer than lower weight samples. If not provided, all samples
             are assumed to have uniform weight.
         """
+        print("use split MODE: %s" % (MODE))
+        if MODE == 'data_split' or MODE == 'value_split':
+            print("the splitting process is speed up by the number of splits per feature: %d" %(NUM_TRIALS_PER_FEATURE))
 
         self.rand_r_state = self.random_state.randint(0, RAND_R_MAX)
         cdef SIZE_t n_samples = X.shape[0]
@@ -298,6 +313,8 @@ cdef class BaseDenseSplitter(Splitter):
             safe_realloc(&self.sample_mask, self.n_total_samples)
             memset(self.sample_mask, 0, self.n_total_samples*sizeof(SIZE_t))
 
+        self.criterion.init_data(self.X, self.X_sample_stride, self.X_feature_stride, sample_weight)
+
         return 0
 
 
@@ -364,6 +381,8 @@ cdef class BestSplitter(BaseDenseSplitter):
         cdef SIZE_t partition_end
 
         _init_split(&best, end)
+        with gil:
+            split_interval = 1. * (end - start) / NUM_TRIALS_PER_FEATURE
 
         if self.presort == 1:
             for p in range(start, end):
@@ -378,6 +397,10 @@ cdef class BestSplitter(BaseDenseSplitter):
         # for good splitting) by ancestor nodes and save the information on
         # newly discovered constant features to spare computation on descendant
         # nodes.
+        with gil:
+            feature_cnt = 1
+            start_time, end_time = time.time(), time.time()
+
         while (f_i > n_total_constants and  # Stop early if remaining features
                                             # are constant
                 (n_visited_features < max_features or
@@ -398,6 +421,14 @@ cdef class BestSplitter(BaseDenseSplitter):
             #   and aren't constant.
 
             # Draw a feature at random
+            with gil:
+                print("draw %d feature..." % (feature_cnt))
+                feature_cnt += 1
+                start_time = time.time()
+                percentile = (end - start)*1.0 * PERCENT_PRINT / 100
+                next_percentage = 0
+                num_data_each_percent = 1.0 * (end-start) / 100
+
             f_j = rand_int(n_drawn_constants, f_i - n_found_constants,
                            random_state)
 
@@ -424,7 +455,7 @@ cdef class BestSplitter(BaseDenseSplitter):
                     p = start
                     feature_idx_offset = self.X_idx_sorted_stride * current.feature
 
-                    for i in range(self.n_total_samples): 
+                    for i in range(self.n_total_samples):
                         j = X_idx_sorted[i + feature_idx_offset]
                         if sample_mask[j] == 1:
                             samples[p] = j
@@ -451,14 +482,31 @@ cdef class BestSplitter(BaseDenseSplitter):
                     self.criterion.reset()
                     p = start
 
+                    with gil:
+                        split_value_interval = 1.0 * (Xf[end-1] - Xf[start]) / NUM_TRIALS_PER_FEATURE
+                        next_split_value = split_value_interval
+
                     while p < end:
                         while (p + 1 < end and
                                Xf[p + 1] <= Xf[p] + FEATURE_THRESHOLD):
                             p += 1
-
+                        with gil:
+                            if MODE == 'value_split':
+                                while (p + 1 < end and
+                                       Xf[p] < min(Xf[end-1], next_split_value)):
+                                    p += 1
+                                p+=1
+                                next_split_value += split_value_interval
+                            # (p + 1 >= end) or (X[samples[p + 1], current.feature] >
+                            #                    X[samples[p], current.feature])
+                            elif MODE == 'data_split':
+                                p += split_interval
+                            else:
+                                # default mode
+                                p+=1
                         # (p + 1 >= end) or (X[samples[p + 1], current.feature] >
                         #                    X[samples[p], current.feature])
-                        p += 1
+                        # p += 1
                         # (p >= end) or (X[samples[p], current.feature] >
                         #                X[samples[p - 1], current.feature])
 
@@ -490,6 +538,15 @@ cdef class BestSplitter(BaseDenseSplitter):
                                     current.threshold = Xf[p - 1]
 
                                 best = current  # copy
+
+                            with gil:
+                                if (p-start) >= start + num_data_each_percent * next_percentage:
+                                    cur_percentage = int((p-start) / num_data_each_percent)
+                                    print("%d percent of data splitted" % (cur_percentage))
+                                    next_percentage = cur_percentage + PERCENT_PRINT
+            with gil:
+                end_time = time.time()
+                print("time spned: %d sec" % (end_time - start_time) )
 
         # Reorganize into samples[start:best.pos] + samples[best.pos:end]
         if best.pos < end:

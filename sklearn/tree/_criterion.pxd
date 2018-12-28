@@ -49,10 +49,20 @@ cdef class Criterion:
     cdef double* sum_left           # Same as above, but for the left side of the split
     cdef double* sum_right          # same as above, but for the right side of the split
 
+    cdef double* coefficients
+
+    cdef DOUBLE_t* lift_se                    # Values of y
+    cdef DTYPE_t* X
+    cdef SIZE_t X_sample_stride
+    cdef SIZE_t X_feature_stride
+
+
     # The criterion object is maintained such that left and right collected
     # statistics correspond to samples[start:pos] and samples[pos:end].
 
     # Methods
+    cdef int init_data(self, DTYPE_t* X, SIZE_t X_sample_stride, SIZE_t X_feature_stride, DOUBLE_t* lift_se) nogil except -1
+
     cdef int init(self, DOUBLE_t* y, SIZE_t y_stride, DOUBLE_t* sample_weight,
                   double weighted_n_samples, SIZE_t* samples, SIZE_t start,
                   SIZE_t end) nogil except -1

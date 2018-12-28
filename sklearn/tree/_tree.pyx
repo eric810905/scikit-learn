@@ -206,6 +206,9 @@ cdef class DepthFirstTreeBuilder(TreeBuilder):
                 with gil:
                     raise MemoryError()
 
+            with gil:
+                num_splits = 1
+
             while not stack.is_empty():
                 stack.pop(&stack_record)
 
@@ -233,7 +236,11 @@ cdef class DepthFirstTreeBuilder(TreeBuilder):
                            (impurity <= min_impurity_split))
 
                 if not is_leaf:
+                    with gil:
+                        print("spliting %d node... tree depth %d" % (num_splits, depth))
                     splitter.node_split(impurity, &split, &n_constant_features)
+                    with gil:
+                        num_splits += 1
                     # If EPSILON=0 in the below comparison, float precision
                     # issues stop splitting, producing trees that are
                     # dissimilar to v0.18
@@ -614,7 +621,8 @@ cdef class Tree:
         safe_realloc(&self.n_classes, n_outputs)
 
         self.max_n_classes = np.max(n_classes)
-        self.value_stride = n_outputs * self.max_n_classes
+        # self.value_stride = n_outputs * self.max_n_classes
+        self.value_stride = 8 * self.max_n_classes
 
         cdef SIZE_t k
         for k in range(n_outputs):
@@ -771,8 +779,8 @@ cdef class Tree:
         """Predict target for X."""
         out = self._get_value_ndarray().take(self.apply(X), axis=0,
                                              mode='clip')
-        if self.n_outputs == 1:
-            out = out.reshape(X.shape[0], self.max_n_classes)
+        # if self.n_outputs == 1:
+        #     out = out.reshape(X.shape[0], self.max_n_classes)
         return out
 
     cpdef np.ndarray apply(self, object X):
@@ -1105,7 +1113,8 @@ cdef class Tree:
         """
         cdef np.npy_intp shape[3]
         shape[0] = <np.npy_intp> self.node_count
-        shape[1] = <np.npy_intp> self.n_outputs
+        # shape[1] = <np.npy_intp> self.n_outputs
+        shape[1] = <np.npy_intp> 8
         shape[2] = <np.npy_intp> self.max_n_classes
         cdef np.ndarray arr
         arr = np.PyArray_SimpleNewFromData(3, shape, np.NPY_DOUBLE, self.value)
