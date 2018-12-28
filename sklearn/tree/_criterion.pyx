@@ -1030,6 +1030,7 @@ cdef class RegressionCriterion(Criterion):
         for k in range(self.n_outputs):
             dest[k] = self.sum_total[k] / self.weighted_n_node_samples
 
+
 cdef class MSE(RegressionCriterion):
     """Mean squared error impurity criterion.
 

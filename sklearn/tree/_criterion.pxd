@@ -51,7 +51,7 @@ cdef class Criterion:
 
     cdef double* coefficients
 
-    cdef DOUBLE_t* lift_se                    # Values of y
+    cdef DOUBLE_t* lift_se
     cdef DTYPE_t* X
     cdef SIZE_t X_sample_stride
     cdef SIZE_t X_feature_stride
