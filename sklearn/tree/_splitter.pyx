@@ -491,24 +491,19 @@ cdef class BestSplitter(BaseDenseSplitter):
                                Xf[p + 1] <= Xf[p] + FEATURE_THRESHOLD):
                             p += 1
                         with gil:
+                            if MODE == 'data_split':
+                                p += split_interval
+                            else:
+                                # (p + 1 >= end) or (X[samples[p + 1], current.feature] >
+                                #                    X[samples[p], current.feature])
+                                p += 1
+                                # (p >= end) or (X[samples[p], current.feature] >
+                                #                X[samples[p - 1], current.feature])
                             if MODE == 'value_split':
                                 while (p + 1 < end and
                                        Xf[p] < min(Xf[end-1], next_split_value)):
                                     p += 1
-                                p+=1
                                 next_split_value += split_value_interval
-                            # (p + 1 >= end) or (X[samples[p + 1], current.feature] >
-                            #                    X[samples[p], current.feature])
-                            elif MODE == 'data_split':
-                                p += split_interval
-                            else:
-                                # default mode
-                                p+=1
-                        # (p + 1 >= end) or (X[samples[p + 1], current.feature] >
-                        #                    X[samples[p], current.feature])
-                        # p += 1
-                        # (p >= end) or (X[samples[p], current.feature] >
-                        #                X[samples[p - 1], current.feature])
 
                         if p < end:
                             current.pos = p
